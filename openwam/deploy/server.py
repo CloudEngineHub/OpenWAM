@@ -617,6 +617,32 @@ def _apply_inference_overrides(cfg, args):
     return cfg
 
 
+def resolve_deploy_args(args):
+    """Resolve native deploy config and checkpoint without loading a model."""
+    from omegaconf import OmegaConf
+
+    cfg = _load_deploy_yaml(args.config)
+    if args.overrides:
+        cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.overrides))
+
+    cfg = _apply_inference_overrides(cfg, args)
+    cfg = _apply_execution_cli_overrides(cfg, args)
+    _validate_inference_config(cfg)
+    _apply_compile_enabled_override(cfg, args.compile_enabled)
+
+    # Checkpoint dir: CLI --ckpt-dir > checkpoint_path in the deploy yaml.
+    ckpt_dir = args.ckpt_dir
+    if ckpt_dir is None:
+        yaml_ckpt = OmegaConf.select(cfg, "checkpoint_path", default=None)
+        if yaml_ckpt:
+            ckpt_dir = str(yaml_ckpt)
+            logging.getLogger("deploy").info("Using checkpoint from deploy yaml: %s", ckpt_dir)
+        else:
+            raise ValueError("--ckpt-dir is required (or set checkpoint_path in the deploy yaml)")
+
+    return cfg, ckpt_dir
+
+
 def main(argv: Optional[list[str]] = None):
     """CLI entrypoint for running the OpenWAM policy server."""
     from omegaconf import OmegaConf
@@ -630,27 +656,10 @@ def main(argv: Optional[list[str]] = None):
     )
     _log_attention_backends(logging.getLogger("deploy"))
 
-    cfg = _load_deploy_yaml(args.config)
-    if args.overrides:
-        cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.overrides))
-
     try:
-        cfg = _apply_inference_overrides(cfg, args)
-        cfg = _apply_execution_cli_overrides(cfg, args)
-        _validate_inference_config(cfg)
+        cfg, ckpt_dir = resolve_deploy_args(args)
     except ValueError as exc:
         parser.error(str(exc))
-    _apply_compile_enabled_override(cfg, args.compile_enabled)
-
-    # Checkpoint dir: CLI --ckpt-dir > checkpoint_path in the deploy yaml.
-    ckpt_dir = args.ckpt_dir
-    if ckpt_dir is None:
-        yaml_ckpt = OmegaConf.select(cfg, "checkpoint_path", default=None)
-        if yaml_ckpt:
-            ckpt_dir = str(yaml_ckpt)
-            logging.getLogger("deploy").info("Using checkpoint from deploy yaml: %s", ckpt_dir)
-        else:
-            parser.error("--ckpt-dir is required (or set checkpoint_path in the deploy yaml)")
 
     # Device: CLI --device > yaml device > cuda.
     device = args.device or str(OmegaConf.select(cfg, "device", default="cuda"))
