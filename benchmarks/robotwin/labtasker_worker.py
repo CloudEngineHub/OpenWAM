@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
@@ -133,6 +134,9 @@ def evaluate_batch(
         flush=True,
     )
     server.load_or_reuse(inputs["model"])
+    labtasker.report_worker_telemetry(
+        {"model_id": inputs["model"]["identity"], "checkpoint": inputs["model"]["checkpoint"]}
+    )
     attempt_dir = args.output_dir / "attempts" / task_info.id / task_info.run_id
     attempt_dir.mkdir(parents=True, exist_ok=True)
     policy_config = write_policy_config(inputs["policy_config"], attempt_dir)
@@ -213,6 +217,7 @@ def run_worker(args: argparse.Namespace, server: WorkerPolicyServer | None) -> N
         queue=args.queue,
         idle_timeout=args.idle_timeout,
         max_consecutive_failures=args.max_consecutive_failures,
+        metadata={"node": socket.gethostname(), "gpu": args.gpu, "port": args.port},
     )
     def run_task() -> None:
         task_info = labtasker.task_info()

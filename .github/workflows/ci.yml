@@ -39,7 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchvision==0.22.1
           python -m pip install -e .
-          python -m pip install pytest labtasker==2.4.0
+          python -m pip install pytest labtasker==2.5.0
 
       - name: Run standard checks
         run: make check

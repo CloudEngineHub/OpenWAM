@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import signal
+import socket
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,12 @@ def run_worker(
         queue=args.queue,
         idle_timeout=args.idle_timeout,
         max_consecutive_failures=args.max_consecutive_failures,
+        metadata={
+            "node": socket.gethostname(),
+            "gpu": worker_resources.gpu,
+            "render_gpu": worker_resources.render_gpu,
+            "port": worker_resources.port,
+        },
     )
     def run_task() -> None:
         task_info = labtasker.task_info()
@@ -118,6 +125,9 @@ def run_worker(
             flush=True,
         )
         server.load_or_reuse(inputs["model"])
+        labtasker.report_worker_telemetry(
+            {"model_id": inputs["model"]["identity"], "checkpoint": inputs["model"]["checkpoint"]}
+        )
         config.trial_start, config.num_trials = trial_start, num_trials
         config.manifest_path = Path(inputs["manifest_path"])
         config.manifest_hash = inputs["manifest_hash"]
