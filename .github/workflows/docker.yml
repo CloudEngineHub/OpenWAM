@@ -2,9 +2,15 @@ name: Docker build and tests
 
 on:
   pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'assets/repo_images/**'
   push:
     branches: [main, 'docker/**']
     tags: ['v*']
+    paths-ignore:
+      - 'README.md'
+      - 'assets/repo_images/**'
   workflow_dispatch:
 
 permissions:
