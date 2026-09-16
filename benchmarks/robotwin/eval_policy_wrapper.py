@@ -14,6 +14,7 @@ import tempfile
 import traceback
 import types
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -424,6 +425,30 @@ def _write_labtasker_result(payload: dict) -> None:
         json.dump(payload, handle, indent=2)
 
 
+def _initialize_eval_task_state(task_name: str, task_env: Any) -> None:
+    """Recreate task fields that verified RoboTwin sets only in ``play_once``.
+
+    Manifest construction runs the expert ``play_once`` in another process.
+    Cached evaluation starts from ``setup_demo`` and therefore must initialize
+    the scene-derived fields that these tasks read from ``check_success``.
+    """
+
+    if task_name not in ("open_laptop", "place_object_scale", "put_object_cabinet"):
+        return
+
+    task_module = sys.modules[type(task_env).__module__]
+    arm_tag_type = task_module.ArmTag
+    if task_name == "open_laptop":
+        face_prod = task_module.get_face_prod(task_env.laptop.get_pose().q, [1, 0, 0], [1, 0, 0])
+        task_env.arm_tag = arm_tag_type("left" if face_prod > 0 else "right")
+        return
+
+    object_pose = task_env.object.get_pose().p
+    task_env.arm_tag = arm_tag_type("right" if object_pose[0] > 0 else "left")
+    if task_name == "put_object_cabinet":
+        task_env.origin_z = object_pose[2]
+
+
 def _install_manifest(module) -> None:
     """Replace policy rollout with a contiguous expert-feasibility scan."""
 
@@ -544,6 +569,7 @@ def _install_eval(module) -> None:
                     policy_module.set_benchmark_rng_domain(domain)
                 with domain.activate():
                     task_env.setup_demo(now_ep_num=episode, seed=seed, is_test=True, **args)
+                    _initialize_eval_task_state(task_name, task_env)
                     task_env.set_instruction(instruction=entry["instructions"][selected_type])
                     _canonicalize_torch_cuda(seed)
 

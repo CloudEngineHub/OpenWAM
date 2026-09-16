@@ -166,6 +166,42 @@ def test_seed_planner_isolated_from_caller_rng(tmp_path, monkeypatch):
     assert first["manifest_hash"] == second["manifest_hash"]
 
 
+def test_eval_task_state_matches_robotwin_play_once_assignments(monkeypatch):
+    import types
+
+    class ArmTag(str):
+        pass
+
+    def make_env(task, *, object_position=None, laptop_quaternion=None, face_prod=None):
+        module_name = f"fake_robotwin_env_{task}"
+        task_module = types.ModuleType(module_name)
+        task_module.ArmTag = ArmTag
+        if face_prod is not None:
+            task_module.get_face_prod = lambda *_: face_prod
+        monkeypatch.setitem(sys.modules, module_name, task_module)
+
+        env_type = type("Env", (), {"__module__": module_name})
+        env = env_type()
+        if object_position is not None:
+            env.object = SimpleNamespace(get_pose=lambda: SimpleNamespace(p=object_position))
+        if laptop_quaternion is not None:
+            env.laptop = SimpleNamespace(get_pose=lambda: SimpleNamespace(q=laptop_quaternion))
+        return env
+
+    laptop = make_env("open_laptop", laptop_quaternion=[1, 0, 0, 0], face_prod=1)
+    M.eval_policy_wrapper._initialize_eval_task_state("open_laptop", laptop)
+    assert laptop.arm_tag == ArmTag("left")
+
+    scale = make_env("place_object_scale", object_position=[0.2, 0.0, 0.4])
+    M.eval_policy_wrapper._initialize_eval_task_state("place_object_scale", scale)
+    assert scale.arm_tag == ArmTag("right")
+
+    cabinet = make_env("put_object_cabinet", object_position=[-0.2, 0.0, 0.37])
+    M.eval_policy_wrapper._initialize_eval_task_state("put_object_cabinet", cabinet)
+    assert cabinet.arm_tag == ArmTag("left")
+    assert cabinet.origin_z == 0.37
+
+
 def test_eval_uses_planned_seeds_and_absolute_indices(tmp_path, monkeypatch):
     import types
 
@@ -216,7 +252,13 @@ def test_eval_uses_planned_seeds_and_absolute_indices(tmp_path, monkeypatch):
     monkeypatch.setenv("ROBOTWIN_INSTRUCTION_TYPE", "unseen")
     M.eval_policy_wrapper._install_eval(module)
     cuda_seeds = []
+    initialized = []
     monkeypatch.setattr(M.eval_policy_wrapper, "_canonicalize_torch_cuda", cuda_seeds.append)
+    monkeypatch.setattr(
+        M.eval_policy_wrapper,
+        "_initialize_eval_task_state",
+        lambda task, env: initialized.append((task, env.seed)),
+    )
 
     class Env:
         def __init__(self):
@@ -255,6 +297,7 @@ def test_eval_uses_planned_seeds_and_absolute_indices(tmp_path, monkeypatch):
     )
     payload = json.loads(result.read_text())
     assert env.calls == [(4, 100004), (5, 100005)]
+    assert initialized == [("adjust_bottle", 100004), ("adjust_bottle", 100005)]
     assert cuda_seeds == [100004, 100005]
     assert [row["instruction"] for row in payload["episodes"]] == ["instruction-4", "instruction-5"]
     assert [row["success"] for row in payload["episodes"]] == [True, False]
