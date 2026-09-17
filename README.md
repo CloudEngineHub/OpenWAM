@@ -415,6 +415,12 @@ Installation and Assets Preparation above cover environment setup and model or
 dataset downloads. Benchmark-specific environment and evaluation details remain
 in the benchmarks directory.
 
+## Projects Based on OpenWAM
+
+- **[LD4WAM](https://github.com/stubborn111/LD4WAM)** — *LD4WAM: Learning Latent Dynamics from Human Videos for World Action Models* ([arXiv:2608.22403](https://arxiv.org/abs/2608.22403)). Learns a Latent Dynamics Model (LDM) from human videos and uses it to build a World Dynamics Action Model (WDAM) — a Wan2.2 video DiT coupled with a latent-dynamics expert and an action expert — on top of the OpenWAM framework, evaluated on RoboTwin 2.0.
+
+If you build on OpenWAM, feel free to open a PR to add your project here.
+
 ## Star History
 
 <p align="center">
