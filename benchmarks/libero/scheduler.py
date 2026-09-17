@@ -1200,6 +1200,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.num_trials is None:
         args.num_trials = 50
     args.ckpt_dir = args.ckpt_dir.expanduser().resolve()
+    # Never resolve the interpreter: a virtualenv's bin/python is a symlink to
+    # the base interpreter, and executing that target directly leaves the venv
+    # undetected, so its site-packages never reach the server's sys.path.
     args.server_python = args.server_python.expanduser().absolute()
     # Preserve the public default aliases in logs and manifests instead of
     # exposing an implementation-specific physical environment directory.
