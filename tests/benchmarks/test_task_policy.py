@@ -114,6 +114,7 @@ def test_lazy_reload_only_on_model_change(checkpoint, monkeypatch):
     finally:
         server.close()
     assert all(p.poll() is not None for p in launched)
+    assert all(len(token) == 48 and token.isascii() and token.isalnum() for token in readiness_tokens)
     assert all(option == ("ws://127.0.0.1:9999", 1, None) for option in connection_options)
 
 

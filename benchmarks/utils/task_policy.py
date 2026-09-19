@@ -98,7 +98,7 @@ class WorkerPolicyServer:
         config = directory / "deploy.yml"
         OmegaConf.save(OmegaConf.create(model["effective_config"]), config)
         checkpoint = Path(model["checkpoint"])
-        readiness_token = secrets.token_urlsafe(24)
+        readiness_token = secrets.token_hex(24)
         command = [
             str(args.server_python),
             str(ROOT / "scripts/deploy.py"),
