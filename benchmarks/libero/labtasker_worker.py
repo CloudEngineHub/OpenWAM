@@ -193,6 +193,9 @@ def main(argv: list[str] | None = None) -> int:
         args.gpu, args.render_gpu if args.render_gpu is not None else args.gpu, args.port
     )
     try:
+        if args.auto_start_local_server:
+            with project_context(), runtime.create_client(queue=args.queue, auto_start_local_server=True) as client:
+                client.count_tasks()
         print(f"[worker] route={args.route} operation={args.operation} gpu={worker_resources.gpu}", flush=True)
         with project_context():
             run_worker(args, worker_resources, server)

@@ -15,13 +15,14 @@ if Path(args[0]).name == "deploy.py":
     if os.environ.get("FAKE_SERVER_FAIL_GPU") == os.environ.get("CUDA_VISIBLE_DEVICES", "unset"):
         raise SystemExit(1)
     port = int(args[args.index("--port") + 1])
+    readiness_token = args[args.index("--readiness-token") + 1]
     import json
 
     from websockets.sync.server import serve
 
     def respond(ws):
         for message in ws:
-            ws.send(json.dumps({"type": "pong"}))
+            ws.send(json.dumps({"type": "pong", "readiness_token": readiness_token}))
 
     with serve(respond, "127.0.0.1", port) as server:
         server.serve_forever()

@@ -3,11 +3,18 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
-import labtasker
 import pytest
+from websockets.exceptions import WebSocketException
 
-from benchmarks.utils import task_policy as policy
-from benchmarks.utils.eval_manifest import load_cached_manifest, load_manifest, publish_manifest, seal_manifest
+labtasker = pytest.importorskip("labtasker")
+
+from benchmarks.utils import task_policy as policy  # noqa: E402
+from benchmarks.utils.eval_manifest import (  # noqa: E402
+    load_cached_manifest,
+    load_manifest,
+    publish_manifest,
+    seal_manifest,
+)
 
 
 @pytest.fixture
@@ -44,6 +51,8 @@ def test_lazy_reload_only_on_model_change(checkpoint, monkeypatch):
         output_dir=checkpoint, server_python="python", host="127.0.0.1", port=9999, gpu=0, server_start_timeout=1
     )
     launched = []
+    readiness_tokens = []
+    connection_options = []
 
     class Process:
         def __init__(self):
@@ -66,27 +75,30 @@ def test_lazy_reload_only_on_model_change(checkpoint, monkeypatch):
             self.items.clear()
 
     class Connection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
         def send(self, value):
             pass
 
         def recv(self, **kw):
-            return '{"type":"pong"}'
+            return '{"type":"pong","readiness_token":"' + readiness_tokens[-1] + '"}'
+
+        def close(self):
+            pass
 
     def spawn(*args, **kw):
         assert all(p.poll() is not None for p in launched)
+        command = args[0]
+        readiness_tokens.append(command[command.index("--readiness-token") + 1])
         process = Process()
         launched.append(process)
         return process
 
+    def connect(uri, *, open_timeout=None, proxy="auto"):
+        connection_options.append((uri, open_timeout, proxy))
+        return Connection()
+
     monkeypatch.setattr(policy, "ProcessRegistry", Registry)
     monkeypatch.setattr(policy, "spawn_resource", spawn)
-    monkeypatch.setattr(websockets.sync.client, "connect", lambda *a, **k: Connection())
+    monkeypatch.setattr(websockets.sync.client, "connect", connect)
     monkeypatch.setattr(labtasker, "cancellation_requested", lambda: False)
     server = policy.WorkerPolicyServer(args)
     try:
@@ -102,6 +114,7 @@ def test_lazy_reload_only_on_model_change(checkpoint, monkeypatch):
     finally:
         server.close()
     assert all(p.poll() is not None for p in launched)
+    assert all(option == ("ws://127.0.0.1:9999", 1, None) for option in connection_options)
 
 
 def test_cleanup_failure_is_fatal(monkeypatch):
@@ -113,6 +126,72 @@ def test_cleanup_failure_is_fatal(monkeypatch):
     monkeypatch.setattr(server.owned, "terminate_all", fail)
     with pytest.raises(labtasker.FatalWorkerError):
         server.close()
+
+
+@pytest.mark.parametrize(
+    ("reply", "message"),
+    [
+        ('{"type":"pong","readiness_token":"another-process"}', "owned by another server"),
+        (WebSocketException("handshake failed"), "cannot use policy endpoint"),
+        (TimeoutError("endpoint did not answer"), "cannot use policy endpoint"),
+        ('{"type":"ready"}', "cannot use policy endpoint"),
+        ("[]", "cannot use policy endpoint"),
+        ("not JSON", "cannot use policy endpoint"),
+    ],
+)
+def test_existing_policy_endpoint_is_rejected(checkpoint, monkeypatch, reply, message):
+    import websockets.sync.client
+
+    process = SimpleNamespace(code=None)
+    process.poll = lambda: process.code
+
+    class Registry:
+        def __init__(self):
+            self.child = None
+            self.log = None
+
+        def add(self, child, log):
+            self.child = child
+            self.log = log
+
+        def terminate_all(self):
+            if self.child is not None:
+                process.code = 0
+            if self.log is not None:
+                self.log.close()
+
+    class Connection:
+        def send(self, value):
+            pass
+
+        def recv(self, **kwargs):
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+
+        def close(self):
+            pass
+
+    def connect(uri, *, open_timeout=None, proxy="auto"):
+        return Connection()
+
+    monkeypatch.setattr(policy, "ProcessRegistry", Registry)
+    monkeypatch.setattr(policy, "spawn_resource", lambda *args, **kwargs: process)
+    monkeypatch.setattr(websockets.sync.client, "connect", connect)
+    monkeypatch.setattr(labtasker, "cancellation_requested", lambda: False)
+    args = SimpleNamespace(
+        output_dir=checkpoint,
+        server_python="python",
+        host="127.0.0.1",
+        port=9999,
+        gpu=0,
+        server_start_timeout=1,
+    )
+    server = policy.WorkerPolicyServer(args)
+    with pytest.raises(RuntimeError, match=message):
+        server.load_or_reuse(policy.resolve_policy_model_spec(["--ckpt-dir", str(checkpoint)]))
+    assert process.code == 0
+    assert server.identity is None
 
 
 def test_cache_rebuild_keeps_queued_manifest_immutable(tmp_path):

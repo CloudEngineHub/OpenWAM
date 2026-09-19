@@ -118,11 +118,11 @@ iniconfig==2.3.0
     # via pytest
 jinja2==3.1.6
     # via torch
-labtasker==2.5.0
+labtasker==2.6.0
     # via openwam (pyproject.toml)
-labtasker-client==2.5.0
+labtasker-client==2.6.0
     # via labtasker
-labtasker-server==2.5.0
+labtasker-server==2.6.0
     # via labtasker
 mako==1.4.1
     # via alembic

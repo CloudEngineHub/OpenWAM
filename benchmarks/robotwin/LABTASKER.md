@@ -3,8 +3,8 @@
 This lightweight integration gives you more built-in features with less custom
 orchestration. Labtasker handles task scheduling, retries and progress tracking,
 keeping the evaluation adapter small and the workflow simple: submit Tasks,
-start Workers and inspect results. On a single machine, its local server starts
-automatically.
+start Workers and inspect results. On a single machine with a local-filesystem
+checkout, you can explicitly authorize its managed local server on first use.
 
 Compared with the traditional launcher, you get:
 
@@ -43,11 +43,70 @@ export ROBOTWIN_PATH=/path/to/RoboTwin
 python -m pip install -r benchmarks/robotwin/requirements-labtasker.txt
 ```
 
-On one machine, no Labtasker server setup is needed.
+**On one machine with the repository on a local disk, you can continue to
+the first-run commands below.** Their `--auto-start-local-server` flag starts
+Labtasker for you; later commands reconnect automatically. No separate server
+command, port or database configuration is needed. The project GPU Docker image
+already includes the full Labtasker package needed for this workflow.
+
+For multiple machines, or a checkout on NFS, WekaFS or Lustre, use the setup
+below first. Use it also if automatic startup reports an unknown filesystem.
+
+<details>
+<summary>Setup for multiple machines or a shared-filesystem checkout</summary>
+
+If your team already runs a Labtasker server, ask for its URL and token and
+skip to the client settings below. Otherwise, run this once on one machine:
+
+```bash
+# Supply your own secret token.
+export LABTASKER_SERVER_TOKEN=...  # do not commit the token
+labtasker-server serve --connection http --host 0.0.0.0
+```
+
+By default, the server saves its records in `.labtasker/` under the directory
+where you start it. Its automatically created `server.db` stores submitted
+task inputs, task status and reported results. Keep this directory to retain
+your evaluation history.
+
+To choose another location, add just `--labtasker-root /path/to/openwam-eval`;
+`server.db` follows that directory automatically. `--database` only overrides
+the database file's location separately and is unnecessary for this setup.
+Local disks and NFS/shared storage are supported: the server detects the
+filesystem automatically. On shared storage, run only one server for that
+directory/database, even when several machines can access it. The local-disk
+restriction applies to `--auto-start-local-server`, not this manual command.
+
+Workers keep their execution logs and run records under their own
+`.labtasker/runs/`; setting the server's `--labtasker-root` does not move remote
+Worker logs. Benchmark logs, videos and detailed evaluation results still go
+to the output directories described below.
+
+The server listens on port **8000** by default. Keep this command running in
+its terminal or under your process supervisor.
+
+In each shell that submits tasks, runs Workers or reads results, set:
+
+```bash
+export LABTASKER_URL=http://SERVER_HOST:8000
+export LABTASKER_TOKEN=...  # same token as the server
+```
+
+Replace `SERVER_HOST` with the server machine's reachable hostname or IP.
+Then follow the evaluation steps below, omitting `--auto-start-local-server`.
+All Workers must be able to access the submitted checkpoint and manifest paths.
+
+</details>
+
+For background, see the optional
+[Labtasker guide and demo video](https://luocfprime.github.io/labtasker/latest/).
 
 > [!TIP]
-> Labtasker uses a server–client architecture and a shared task queue to manage
-> concurrent Workers. See the [conceptual guide and demo video](https://luocfprime.github.io/labtasker/latest/).
+> To let your coding agent help with Labtasker setup, task submission, progress
+> monitoring, troubleshooting and result summaries, install the **Labtasker skill**.
+> See the [Agent Skill guide](https://github.com/luocfprime/labtasker/blob/main/docs/guides/agent-skill.md)
+> for installation instructions. Describe the evaluation you want to run; the
+> agent can help translate it into the required Labtasker commands and settings.
 
 <a id="first-run"></a>
 
@@ -60,7 +119,8 @@ On one machine, no Labtasker server setup is needed.
 ### 1. Submit manifest-building Tasks
 
 ```bash
-python benchmarks/robotwin/labtasker_submit.py --operation build_manifest --mode demo_clean
+python benchmarks/robotwin/labtasker_submit.py --auto-start-local-server \
+  --operation build_manifest --mode demo_clean
 ```
 
 Save the submission ID printed by this command.
@@ -98,7 +158,7 @@ Replace `SUBMISSION_ID` with the printed ID. Continue when the count reaches zer
 Once the cache is ready:
 
 ```bash
-python benchmarks/robotwin/labtasker_submit.py --mode demo_clean \
+python benchmarks/robotwin/labtasker_submit.py --auto-start-local-server --mode demo_clean \
   -- --ckpt-dir /path/to/checkpoint
 ```
 

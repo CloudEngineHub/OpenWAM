@@ -10,6 +10,14 @@ SCRIPT = Path(__file__).resolve().parents[2] / "benchmarks" / "utils" / "resourc
 
 
 def gone(pid):
+    stat = Path(f"/proc/{pid}/stat")
+    try:
+        # A killed grandchild may remain as a zombie when container PID 1 does
+        # not reap orphans. It is no longer running and therefore counts as gone.
+        if stat.read_text().split(") ", 1)[1].split()[0] == "Z":
+            return True
+    except (FileNotFoundError, IndexError):
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

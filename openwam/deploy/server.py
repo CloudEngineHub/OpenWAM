@@ -127,9 +127,10 @@ class PolicyServer:
         cfg: Config with policy and server settings.
     """
 
-    def __init__(self, engine, cfg):
+    def __init__(self, engine, cfg, readiness_token: str | None = None):
         self.engine = engine
         self.cfg = cfg
+        self.readiness_token = readiness_token
 
         # Lazy imports at init time to validate availability
         self._policy = None
@@ -176,6 +177,14 @@ class PolicyServer:
         """
         contract = getattr(getattr(self.engine, "architecture", None), "repr_contract", None)
         return dict(contract) if contract else {}
+
+    def _pong_payload(self) -> dict:
+        """Return checkpoint compatibility plus optional launch ownership."""
+
+        result = self._ckpt_contract()
+        if self.readiness_token is not None:
+            result["readiness_token"] = self.readiness_token
+        return result
 
     def predict(self, obs: dict) -> dict:
         """Synchronous prediction for a single observation.
@@ -251,7 +260,7 @@ class PolicyServer:
                             result["type"] = ACTION
                             await websocket.send(json.dumps(result))
                         elif msg_type == PING:
-                            await websocket.send(json.dumps({"type": PONG, **self._ckpt_contract()}))
+                            await websocket.send(json.dumps({"type": PONG, **self._pong_payload()}))
                         else:
                             await websocket.send(
                                 json.dumps(
@@ -332,6 +341,7 @@ def build_server_from_config(
     ckpt_dir: str,
     device: str = "cuda",
     ckpt_name: Optional[str] = None,
+    readiness_token: str | None = None,
 ):
     """Build a PolicyServer from a self-contained checkpoint directory.
 
@@ -351,7 +361,7 @@ def build_server_from_config(
     training_cfg, architecture = load_from_checkpoint_dir(ckpt_dir, device=device, ckpt_name=ckpt_name)
     merged = merge_deploy_cfg(training_cfg, deploy_cfg)
     engine = JointInferenceEngine(cfg=merged, architecture=architecture)
-    return PolicyServer(engine=engine, cfg=merged)
+    return PolicyServer(engine=engine, cfg=merged, readiness_token=readiness_token)
 
 
 _HALF_PRECISION_CUDA_ONLY = " (CUDA fp16/bf16 only; torch_sdpa otherwise)"
@@ -457,6 +467,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", type=str, default=None, help="WebSocket bind host override.")
     parser.add_argument("--port", type=int, default=None, help="WebSocket port override.")
+    parser.add_argument("--readiness-token", help=argparse.SUPPRESS)
     parser.add_argument(
         "--denoise-steps",
         type=int,
@@ -672,6 +683,7 @@ def main(argv: Optional[list[str]] = None):
         ckpt_dir=ckpt_dir,
         device=device,
         ckpt_name=args.ckpt_name,
+        readiness_token=args.readiness_token,
     )
     logging.getLogger("deploy").info(
         "Inference engine ready — steps=%d denoise_mode=%s",

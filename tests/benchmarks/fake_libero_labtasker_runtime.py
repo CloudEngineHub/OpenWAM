@@ -16,7 +16,12 @@ if Path(sys.argv[1]).name == "deploy.py":
         "CUDA_VISIBLE_DEVICES", "unset"
     ):
         sys.exit(1)
-    sys.argv = [sys.argv[0], "--fake-server", sys.argv[sys.argv.index("--port") + 1]]
+    sys.argv = [
+        sys.argv[0],
+        "--fake-server",
+        sys.argv[sys.argv.index("--port") + 1],
+        sys.argv[sys.argv.index("--readiness-token") + 1],
+    ]
 if sys.argv[1] == "-c":
     if "mujoco" in sys.argv[2]:
         print("3.3.2")
@@ -28,7 +33,7 @@ if sys.argv[1] == "--fake-server":
 
     def respond(ws):
         for message in ws:
-            ws.send(json.dumps({"type": "pong"}))
+            ws.send(json.dumps({"type": "pong", "readiness_token": sys.argv[3]}))
 
     with serve(respond, "127.0.0.1", int(sys.argv[2])) as server:
         server.serve_forever()

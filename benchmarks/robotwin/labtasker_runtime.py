@@ -26,11 +26,13 @@ from benchmarks.utils.eval_manifest import (  # noqa: E402
 from benchmarks.utils.eval_sharding import split_range  # noqa: E402
 from benchmarks.utils.labtasker_utils import (  # noqa: E402
     count_task_statuses,
+    create_client,
     list_submission_tasks,
     print_submission_id,
     print_summary_table,
     project_context,
     submit_tasks,
+    validate_submission_coverage,
 )
 from benchmarks.utils.labtasker_utils import new_submission_id as new_submission_id  # noqa: E402, F401
 from benchmarks.utils.owned_processes import ProcessRegistry, spawn_resource  # noqa: E402, F401
@@ -217,6 +219,7 @@ def submit(
     max_attempts: int = 3,
     priority: int = 0,
     note: str | None = None,
+    auto_start_local_server: bool = False,
 ) -> list[str]:
     """Create missing Tasks and reuse exact Tasks from the same submission."""
 
@@ -247,7 +250,7 @@ def submit(
                 f"{grouped_indices[key]:0{width}d}_{total:0{width}d}"
             )
         names.append(display + (f"_{note}" if note else ""))
-    with project_context(), labtasker.Client(queue=queue) as client:
+    with project_context(), create_client(queue=queue, auto_start_local_server=auto_start_local_server) as client:
         task_ids = submit_tasks(
             client,
             inputs,
@@ -298,13 +301,20 @@ def validated_task_result(task: labtasker.Task) -> dict[str, Any] | None:
     return result if valid else None
 
 
-def summarize(submission_id: str, output: str | Path, *, queue: str | None = None) -> int:
+def summarize(
+    submission_id: str,
+    output: str | Path,
+    *,
+    queue: str | None = None,
+    auto_start_local_server: bool = False,
+) -> int:
     """Write one task-level view from authoritative Labtasker state."""
 
-    with project_context(), labtasker.Client(queue=queue) as client:
+    with project_context(), create_client(queue=queue, auto_start_local_server=auto_start_local_server) as client:
         tasks = list_robotwin_submission_tasks(client, submission_id, "run_eval")
     if not tasks:
         raise ValueError(f"RoboTwin eval submission not found: {submission_id}")
+    validate_submission_coverage(tasks)
 
     grouped: dict[tuple[str, str, str], list[labtasker.Task]] = {}
     for task in tasks:
@@ -545,6 +555,11 @@ def parser(mode: str = "submit") -> argparse.ArgumentParser:
     worker = mode == "worker"
     result.add_argument("--route", help="Task route (default: openwam-robotwin-<operation>)")
     result.add_argument("--queue")
+    result.add_argument(
+        "--auto-start-local-server",
+        action="store_true",
+        help="explicitly authorize startup of the project-local Labtasker Server",
+    )
     result.add_argument("--operation", choices=("build_manifest", "run_eval"), default="run_eval")
     if not worker:
         result.add_argument("--mode", choices=("demo_clean", "demo_randomized"), required=True)

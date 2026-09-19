@@ -9,12 +9,19 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
-import labtasker
 import numpy as np
 import pytest
 
-from benchmarks.utils.labtasker_utils import derive_task_id, list_submission_tasks, submit_tasks
+labtasker = pytest.importorskip("labtasker")
+
+from benchmarks.utils.labtasker_utils import (  # noqa: E402
+    derive_task_id,
+    list_submission_tasks,
+    submit_tasks,
+    validate_submission_coverage,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,6 +33,16 @@ def load_runtime(benchmark):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_worker(benchmark, monkeypatch):
+    runtime = load_runtime(benchmark)
+    monkeypatch.setitem(sys.modules, "labtasker_runtime", runtime)
+    path = ROOT / "benchmarks" / benchmark / "labtasker_worker.py"
+    spec = importlib.util.spec_from_file_location(f"{benchmark}_worker_test", path)
+    worker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker)
+    return runtime, worker
 
 
 def free_port():
@@ -43,7 +60,18 @@ def server(tmp_path, monkeypatch):
     port = os.environ["LABTASKER_URL"].rsplit(":", 1)[1]
     log = (tmp_path / "server.log").open("w")
     process = subprocess.Popen(
-        [sys.executable, "-m", "labtasker_server", "serve", "--port", port, "--database", str(tmp_path / "db")],
+        [
+            sys.executable,
+            "-m",
+            "labtasker_server",
+            "serve",
+            "--connection",
+            "http",
+            "--port",
+            port,
+            "--database",
+            str(tmp_path / "db"),
+        ],
         stdout=log,
         stderr=log,
     )
@@ -226,11 +254,80 @@ def test_interrupted_submission_is_completed_idempotently(server):
 
     with pytest.raises(OSError):
         submit_tasks(Interrupted(), inputs, **kwargs)
+    partial = list_submission_tasks(server, "test", "resume")
+    with pytest.raises(ValueError, match="found 1 Tasks with 1 unique indices, expected 3"):
+        validate_submission_coverage(partial)
     ids = submit_tasks(server, inputs, **kwargs)
     assert len(set(ids)) == 3
     assert submit_tasks(server, inputs, **kwargs) == ids
     assert len(list_submission_tasks(server, "test", "resume")) == 3
     assert ids == [derive_task_id("resume", index) for index in range(3)]
+    validate_submission_coverage(list_submission_tasks(server, "test", "resume"))
+
+
+def test_submission_persists_expected_ranges(server):
+    inputs = [
+        {"episode_start": 0, "num_episodes": 5, "total_episodes": 8},
+        {"episode_start": 5, "num_episodes": 3, "total_episodes": 8},
+    ]
+    submit_tasks(
+        server,
+        inputs,
+        benchmark="robotwin",
+        submission_id="ranges",
+        route="test",
+        names=["first", "second"],
+        max_attempts=3,
+        priority=0,
+    )
+    tasks = sorted(list_submission_tasks(server, "robotwin", "ranges"), key=lambda task: task.args["episode_start"])
+    validate_submission_coverage(tasks)
+    assert [task.metadata for task in tasks] == [
+        {
+            "benchmark": "robotwin",
+            "submission_id": "ranges",
+            "submission_task_index": 0,
+            "submission_task_count": 2,
+            "submission_unit_count": 8,
+            "range_kind": "episode",
+            "range_start": 0,
+            "range_count": 5,
+            "range_total": 8,
+        },
+        {
+            "benchmark": "robotwin",
+            "submission_id": "ranges",
+            "submission_task_index": 1,
+            "submission_task_count": 2,
+            "submission_unit_count": 8,
+            "range_kind": "episode",
+            "range_start": 5,
+            "range_count": 3,
+            "range_total": 8,
+        },
+    ]
+    broken = [task.model_copy(deep=True) for task in tasks]
+    broken[1].args["episode_start"] = 4
+    broken[1].metadata["range_start"] = 4
+    with pytest.raises(ValueError, match="not contiguous"):
+        validate_submission_coverage(broken)
+
+    for missing_key in (
+        "submission_task_count",
+        "range_kind",
+        "range_start",
+        "range_count",
+        "range_total",
+    ):
+        incomplete_metadata = [task.model_copy(deep=True) for task in tasks]
+        incomplete_metadata[0].metadata.pop(missing_key)
+        with pytest.raises(ValueError, match="unverifiable|incomplete persisted range coverage|invalid persisted"):
+            validate_submission_coverage(incomplete_metadata)
+
+    duplicate_index = [task.model_copy(deep=True) for task in tasks]
+    duplicate_index.append(tasks[0].model_copy(deep=True))
+    with pytest.raises(ValueError, match="found 3 Tasks with 2 unique indices"):
+        validate_submission_coverage(duplicate_index)
 
 
 def test_submission_supports_per_task_names(server):
@@ -402,6 +499,9 @@ def test_submit_argument_separator(benchmark):
     args = runtime.parse_submit_args([*options, "--", *deploy_args])
     assert args.operation == "run_eval"
     assert args.deploy_args == deploy_args
+    assert not args.auto_start_local_server
+    args = runtime.parse_submit_args([*options, "--auto-start-local-server", "--", *deploy_args])
+    assert args.auto_start_local_server
     for invalid in (["--modle", "x"], deploy_args, ["--model", *deploy_args]):
         with pytest.raises(SystemExit) as error:
             runtime.parse_submit_args([*options, *invalid])
@@ -440,3 +540,174 @@ def test_worker_port_selection(benchmark, base_port, gpu, explicit_port, tmp_pat
         argv += ["--port", str(explicit_port)]
     assert worker.main(argv) == 0
     assert selected == [base_port + gpu if explicit_port is None else explicit_port]
+
+
+@pytest.mark.parametrize(
+    "benchmark,resources,expected",
+    [
+        ("robotwin", None, {"node": "test-node", "gpu": 2, "port": 9002}),
+        (
+            "libero",
+            (2, 7, 9002),
+            {"node": "test-node", "gpu": 2, "render_gpu": 7, "port": 9002},
+        ),
+    ],
+)
+def test_worker_invocation_metadata(benchmark, resources, expected, monkeypatch):
+    runtime, worker = load_worker(benchmark, monkeypatch)
+    captured = {}
+
+    def loop(**kwargs):
+        captured.update(kwargs)
+        return lambda function: lambda: None
+
+    monkeypatch.setattr(worker.socket, "gethostname", lambda: "test-node")
+    monkeypatch.setattr(worker.labtasker, "loop", loop)
+    args = SimpleNamespace(route="route", queue="queue", idle_timeout=1, max_consecutive_failures=2, gpu=2, port=9002)
+    if benchmark == "robotwin":
+        worker.run_worker(args, None)
+    else:
+        worker.run_worker(args, runtime.WorkerResources(*resources), None)
+    assert captured["metadata"] == expected
+
+
+@pytest.mark.parametrize("benchmark", ["robotwin", "libero"])
+def test_build_manifest_worker_does_not_report_telemetry(benchmark, tmp_path, monkeypatch):
+    runtime, worker = load_worker(benchmark, monkeypatch)
+    monkeypatch.setattr(worker.labtasker, "loop", lambda **kwargs: lambda function: function)
+    monkeypatch.setattr(worker.labtasker, "report_worker_telemetry", lambda value: pytest.fail(str(value)))
+    monkeypatch.setattr(worker.labtasker, "finish", lambda result: None)
+    args = SimpleNamespace(
+        route="route",
+        queue="queue",
+        idle_timeout=1,
+        max_consecutive_failures=2,
+        operation="build_manifest",
+        gpu=2,
+        port=9002,
+        output_dir=tmp_path,
+    )
+    task_info = SimpleNamespace(id="task", run_id="run", attempt=1)
+    if benchmark == "robotwin":
+        task_info.args = {
+            "operation": "build_manifest",
+            "task": "adjust_bottle",
+            "mode": "demo_clean",
+            "total_episodes": 1,
+            "policy_config": {},
+        }
+        monkeypatch.setattr(worker.rt, "task_names", lambda: ["adjust_bottle"])
+        monkeypatch.setattr(worker, "build_manifest", lambda *args: {"operation": "build_manifest"})
+        monkeypatch.setattr(worker.labtasker, "task_info", lambda: task_info)
+        worker.run_worker(args, None)
+    else:
+        task_info.args = {
+            "operation": "build_manifest",
+            "suite": "libero_spatial",
+            "task_id": 0,
+            "total_trials": 1,
+            "policy_config": {},
+            "manifest_dir": str(tmp_path / "manifests"),
+            "rebuild": True,
+        }
+        monkeypatch.setattr(worker, "write_policy_config", lambda config, path: path / "policy.yml")
+        monkeypatch.setattr(runtime, "_run_manifest", lambda *args, **kwargs: (tmp_path / "manifest.json", {}))
+        monkeypatch.setattr(worker.labtasker, "task_info", lambda: task_info)
+        worker.run_worker(args, runtime.WorkerResources(2, 7, 9002), None)
+
+
+def test_robotwin_eval_reports_loaded_model_telemetry(tmp_path, monkeypatch):
+    runtime, worker = load_worker("robotwin", monkeypatch)
+    model = {"identity": "model-id", "checkpoint": "/models/checkpoint.safetensors"}
+    events = []
+
+    class StopAfterTelemetry(Exception):
+        pass
+
+    class Server:
+        def load_or_reuse(self, loaded):
+            events.append(("load", loaded))
+
+    monkeypatch.setattr(runtime, "load_manifest", lambda *args, **kwargs: {})
+    monkeypatch.setattr(runtime, "validate_manifest", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, "select_entries", lambda *args, **kwargs: None)
+
+    def report(value):
+        events.append(("telemetry", value))
+        raise StopAfterTelemetry
+
+    monkeypatch.setattr(worker.labtasker, "report_worker_telemetry", report)
+    inputs = {
+        "task": "adjust_bottle",
+        "mode": "demo_clean",
+        "episode_start": 0,
+        "num_episodes": 1,
+        "total_episodes": 1,
+        "manifest_hash": "manifest",
+        "manifest_path": str(tmp_path / "manifest.json"),
+        "model": model,
+    }
+    with pytest.raises(StopAfterTelemetry):
+        worker.evaluate_batch(
+            SimpleNamespace(output_dir=tmp_path),
+            Server(),
+            SimpleNamespace(attempt=1, id="task", run_id="run"),
+            inputs,
+        )
+    assert events == [
+        ("load", model),
+        ("telemetry", {"model_id": "model-id", "checkpoint": "/models/checkpoint.safetensors"}),
+    ]
+
+
+def test_libero_eval_reports_loaded_model_telemetry(tmp_path, monkeypatch):
+    runtime, worker = load_worker("libero", monkeypatch)
+    model = {"identity": "model-id", "checkpoint": "/models/checkpoint.safetensors"}
+    events = []
+
+    class StopAfterTelemetry(Exception):
+        pass
+
+    class Server:
+        def load_or_reuse(self, loaded):
+            events.append(("load", loaded))
+
+    inputs = {
+        "operation": "run_eval",
+        "suite": "libero_spatial",
+        "task_id": 0,
+        "total_trials": 1,
+        "trial_start": 0,
+        "num_trials": 1,
+        "policy_config": {},
+        "manifest_hash": "manifest",
+        "manifest_path": str(tmp_path / "manifest.json"),
+        "model": model,
+    }
+    task_info = SimpleNamespace(args=inputs, attempt=1, id="task", run_id="run")
+    monkeypatch.setattr(worker.labtasker, "loop", lambda **kwargs: lambda function: function)
+    monkeypatch.setattr(worker.labtasker, "task_info", lambda: task_info)
+    monkeypatch.setattr(worker, "write_policy_config", lambda config, path: path / "policy.yml")
+    monkeypatch.setattr(runtime, "load_manifest", lambda *args, **kwargs: {})
+    monkeypatch.setattr(runtime, "validate_manifest", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, "select_entries", lambda *args, **kwargs: None)
+
+    def report(value):
+        events.append(("telemetry", value))
+        raise StopAfterTelemetry
+
+    monkeypatch.setattr(worker.labtasker, "report_worker_telemetry", report)
+    args = SimpleNamespace(
+        route="route",
+        queue="queue",
+        idle_timeout=1,
+        max_consecutive_failures=2,
+        operation="run_eval",
+        output_dir=tmp_path,
+    )
+    with pytest.raises(StopAfterTelemetry):
+        worker.run_worker(args, runtime.WorkerResources(2, 7, 9002), Server())
+    assert events == [
+        ("load", model),
+        ("telemetry", {"model_id": "model-id", "checkpoint": "/models/checkpoint.safetensors"}),
+    ]

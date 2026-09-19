@@ -179,7 +179,7 @@ def test_manifest_entries_replay_identically_in_reverse_mixed_batches_and_retry(
 
 
 def test_progress_file_reporter_forwards_each_changed_snapshot_once(tmp_path, monkeypatch):
-    import labtasker
+    labtasker = pytest.importorskip("labtasker")
 
     path = tmp_path / "progress.json"
     reports = []

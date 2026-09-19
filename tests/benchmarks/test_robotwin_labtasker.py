@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("labtasker")
+
 from benchmarks.robotwin import eval_policy_wrapper
 from benchmarks.robotwin import labtasker_runtime as rt
 
@@ -145,8 +147,6 @@ def test_seed_planner_isolated_from_caller_rng(tmp_path, monkeypatch):
         result = tmp_path / f"manifest-{index}.json"
         monkeypatch.setenv("ROBOTWIN_LABTASKER_RESULT", str(result))
         monkeypatch.setenv("ROBOTWIN_PROGRESS_FILE", str(tmp_path / f"progress-{index}.json"))
-        monkeypatch.setenv("ROBOTWIN_MANIFEST_CACHE_DIR", str(tmp_path / f"cache-{index}"))
-        monkeypatch.delenv("ROBOTWIN_EXTEND_MANIFEST", raising=False)
         M.eval_policy_wrapper._install_manifest(module)
         module.eval_policy(
             "adjust_bottle",

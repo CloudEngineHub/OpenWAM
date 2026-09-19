@@ -25,6 +25,7 @@ def main(argv=None):
         max_attempts=args.max_attempts,
         priority=args.priority,
         note=args.note,
+        auto_start_local_server=args.auto_start_local_server,
     )
     return 0
 

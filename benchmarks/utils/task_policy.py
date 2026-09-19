@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -10,8 +11,10 @@ from typing import Any
 import labtasker
 from omegaconf import OmegaConf
 
+from benchmarks.utils.client import ServerError
 from benchmarks.utils.eval_manifest import content_hash
 from benchmarks.utils.owned_processes import ProcessRegistry, spawn_resource
+from benchmarks.utils.transport import WSPolicyClient
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -95,6 +98,7 @@ class WorkerPolicyServer:
         config = directory / "deploy.yml"
         OmegaConf.save(OmegaConf.create(model["effective_config"]), config)
         checkpoint = Path(model["checkpoint"])
+        readiness_token = secrets.token_urlsafe(24)
         command = [
             str(args.server_python),
             str(ROOT / "scripts/deploy.py"),
@@ -110,6 +114,8 @@ class WorkerPolicyServer:
             args.host,
             "--port",
             str(args.port),
+            "--readiness-token",
+            readiness_token,
         ]
         log = (directory / "server.log").open("w")
         try:
@@ -118,9 +124,7 @@ class WorkerPolicyServer:
             )
             self.owned.add(self.process, log)
             deadline = time.monotonic() + args.server_start_timeout
-            import json
-
-            from websockets.sync.client import connect
+            from websockets.exceptions import WebSocketException
 
             while True:
                 if self.process.poll() is not None:
@@ -129,12 +133,23 @@ class WorkerPolicyServer:
                 if labtasker.cancellation_requested():
                     raise RuntimeError("Task cancelled during model loading")
                 try:
-                    with connect(f"ws://{args.host}:{args.port}", open_timeout=1) as ws:
-                        ws.send(json.dumps({"type": "ping"}))
-                        if json.loads(ws.recv(timeout=1)).get("type") == "pong":
-                            break
-                except (OSError, TimeoutError):
+                    with WSPolicyClient(
+                        f"ws://{args.host}:{args.port}", timeout=1, open_timeout=1
+                    ) as probe:
+                        response = probe.ping()
+                    if not isinstance(response, dict) or response.get("type") != "pong":
+                        raise RuntimeError(
+                            f"cannot use policy endpoint {args.host}:{args.port}: incompatible response"
+                        )
+                    if response.get("readiness_token") != readiness_token:
+                        raise RuntimeError(f"policy port {args.host}:{args.port} is owned by another server")
+                    break
+                except ConnectionRefusedError:
                     pass
+                except (OSError, WebSocketException, ValueError, ServerError) as exc:
+                    raise RuntimeError(
+                        f"cannot use policy endpoint {args.host}:{args.port}: occupied, incompatible, or unreachable"
+                    ) from exc
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"policy startup timed out; see {log.name}")
                 time.sleep(0.2)

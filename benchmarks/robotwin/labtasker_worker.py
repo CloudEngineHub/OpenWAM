@@ -258,6 +258,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.operation == "run_eval":
         server = WorkerPolicyServer(args)
     try:
+        if args.auto_start_local_server:
+            with rt.project_context(), rt.create_client(queue=args.queue, auto_start_local_server=True) as client:
+                client.count_tasks()
         print(f"[worker] route={args.route} operation={args.operation} gpu={args.gpu}", flush=True)
         with rt.project_context():
             run_worker(args, server)
