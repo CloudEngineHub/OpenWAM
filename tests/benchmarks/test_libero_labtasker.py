@@ -215,6 +215,28 @@ def test_manual_stages_cache_retry_and_summary(benchmark, server, tmp_path, monk
     rows = list(csv.DictReader((out / "task_summary.csv").open()))
     assert len(rows) == 1
     assert rows[0]["success_rate"] == "1.0"
+    # Legacy Tasks can be summarized explicitly without requeueing or weakening
+    # validation of their actual results.
+    for task in completed:
+        server.update_task(
+            task.id,
+            changes={"metadata": {
+                key: value for key, value in task.metadata.items()
+                if not key.startswith(("submission_task_", "submission_unit_", "range_"))
+            }},
+        )
+    with pytest.raises(ValueError, match="unverifiable"):
+        rt.summarize("eval-1", out)
+    rt.summarize("eval-1", out, skip_coverage_check=True)
+    assert "--skip-coverage-check" in capsys.readouterr().err
+    assert list(csv.DictReader((out / "task_summary.csv").open())) == rows
+    server.update_task(completed[0].id, changes={"result": {}})
+    with pytest.raises(ValueError, match="invalid .* result"):
+        rt.summarize("eval-1", out, skip_coverage_check=True)
+    for task in completed:
+        server.update_task(task.id, changes={"metadata": task.metadata, "result": task.result})
+        restored = server.get_task(task.id)
+        assert restored.status == "succeeded" and restored.attempt == task.attempt
     if benchmark == "robotwin":
         benchmark_rows = list(csv.DictReader((out / "benchmark_summary.csv").open()))
         assert benchmark_rows[0]["episodes"] == rows[0]["episodes"] == "3"

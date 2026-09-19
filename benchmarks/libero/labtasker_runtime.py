@@ -860,12 +860,13 @@ def summarize(
     *,
     queue: str | None = None,
     auto_start_local_server: bool = False,
+    skip_coverage_check: bool = False,
 ) -> int:
     with project_context(), create_client(queue=queue, auto_start_local_server=auto_start_local_server) as client:
         tasks = list_libero_submission_tasks(client, submission_id, "run_eval")
     if not tasks:
         raise ValueError(f"LIBERO eval submission not found: {submission_id}")
-    validate_submission_coverage(tasks)
+    validate_submission_coverage(tasks, skip_coverage_check=skip_coverage_check)
     _summarize(Path(output), tasks)
     return 0
 

@@ -158,15 +158,24 @@ def submit_tasks(
     ]
 
 
-def validate_submission_coverage(tasks: Sequence[Task]) -> None:
-    """Reject a partial Task-creation prefix instead of reporting it as complete."""
+def validate_submission_coverage(tasks: Sequence[Task], *, skip_coverage_check: bool = False) -> None:
+    """Reject incomplete submissions unless explicitly allowed for summary."""
 
+    if skip_coverage_check:
+        print(
+            "WARNING: task completeness is not checked (--skip-coverage-check); "
+            "missing or overlapping ranges may go undetected. Summary may be partial "
+            "or double-counted; result validation remains enabled.",
+            file=sys.stderr,
+        )
+        return
     if not tasks:
         return
     if any("submission_task_count" not in (task.metadata or {}) for task in tasks):
         raise ValueError(
             "submission completeness is unverifiable because one or more Tasks "
-            "predate persisted coverage metadata; resubmit with a new submission ID"
+            "predate persisted coverage metadata; backfill metadata or summarize with "
+            "--skip-coverage-check if completeness cannot be verified"
         )
     expected_counts = {(task.metadata or {}).get("submission_task_count") for task in tasks}
     expected_units = {(task.metadata or {}).get("submission_unit_count") for task in tasks}

@@ -307,6 +307,7 @@ def summarize(
     *,
     queue: str | None = None,
     auto_start_local_server: bool = False,
+    skip_coverage_check: bool = False,
 ) -> int:
     """Write one task-level view from authoritative Labtasker state."""
 
@@ -314,7 +315,7 @@ def summarize(
         tasks = list_robotwin_submission_tasks(client, submission_id, "run_eval")
     if not tasks:
         raise ValueError(f"RoboTwin eval submission not found: {submission_id}")
-    validate_submission_coverage(tasks)
+    validate_submission_coverage(tasks, skip_coverage_check=skip_coverage_check)
 
     grouped: dict[tuple[str, str, str], list[labtasker.Task]] = {}
     for task in tasks:
