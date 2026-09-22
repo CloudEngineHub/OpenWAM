@@ -580,6 +580,26 @@ class TestJointEngineCompileFlags:
         assert isinstance(engine._prompt_embed_cache, _BoundedPromptEmbedCache)
         assert engine._prompt_embed_cache._maxsize == DEFAULT_PROMPT_EMBED_CACHE_MAXSIZE
 
+    def test_prompt_embed_cache_eviction_preserves_lru_order(self, caplog):
+        from openwam.deploy.engine import _BoundedPromptEmbedCache
+
+        caplog.set_level("WARNING", logger="openwam.deploy.engine")
+        cache = _BoundedPromptEmbedCache(maxsize=3)
+        for key in ("probe", "a", "b", "c"):
+            cache[key] = key
+
+        assert list(cache) == ["a", "b", "c"]
+
+        # Reads refresh recency, so "a" survives the next eviction.
+        assert cache["a"] == "a"
+        cache["d"] = "d"
+        assert list(cache) == ["c", "a", "d"]
+
+        cache["e"] = "e"
+        assert list(cache) == ["a", "d", "e"]
+        warnings = [record for record in caplog.records if "prompt_embed_cache exceeded maxsize" in record.getMessage()]
+        assert len(warnings) == 1
+
     def test_prompt_embed_cache_maxsize_from_config(self):
         engine, _ = self._make_engine(prompt_cache_cfg={"enabled": True, "maxsize": 8})
         assert engine._prompt_embed_cache._maxsize == 8
