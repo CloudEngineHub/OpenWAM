@@ -78,7 +78,12 @@ class _BoundedPromptEmbedCache(OrderedDict):
             self.move_to_end(key)
         super().__setitem__(key, value)
         while len(self) > self._maxsize:
-            evicted_key, _ = self.popitem(last=False)
+            # ``OrderedDict.popitem`` retrieves the value through ``self[key]``.
+            # Since ``__getitem__`` updates recency, that lookup runs after the
+            # key has been removed from the ordering map and raises ``KeyError``.
+            # Delete through the base implementation to bypass the override.
+            evicted_key = next(iter(self))
+            super().__delitem__(evicted_key)
             if not self._evict_warned:
                 self._evict_warned = True
                 logger.warning("prompt_embed_cache exceeded maxsize=%d; evicted %r", self._maxsize, evicted_key)
