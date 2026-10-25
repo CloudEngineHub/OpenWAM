@@ -88,6 +88,8 @@ All architectures are selected via `configs/model/<framework>.yaml` with `archit
 -->
 
 ## News
+- **[2026/10/25]** 🤗 We release all cleaned robot datasets used for OpenWAM pretraining: [AgiBotWorld-Beta](https://huggingface.co/datasets/OpenWAM/AgiBotWorld-Beta), [RoboCOIN](https://huggingface.co/datasets/wayrise/RoboCOIN), [InternData-A1](https://huggingface.co/datasets/OpenWAM/InternData-A1), and [DROID](https://huggingface.co/datasets/OpenWAM/Droid).
+- **[2026/10/10]** 🌟 OpenWAM reaches **1K GitHub stars**! Thank you for your support!
 - **[2026/09/09]** 📄 OpenWAM [Paper](https://arxiv.org/pdf/2609.07398) is released on arXiv.
 - **[2026/09/06]** 🤖 OpenWAM is integrated into [XPolicyLab](https://github.com/XPolicyLab/XPolicyLab).
 - **[2026/09/06]** 🤗 We release all pretrained and finetuned models on [huggingface](https://huggingface.co/OpenWAM).
@@ -354,6 +356,22 @@ Wan2.2-TI2V-5B video backbone, and the Mutual attention mask.
    continuous helper sends repeated predictions over one connection and
    reports the returned action dimension and latency. Stop the deployment
    process after the checks.
+
+### Four-Source Pretraining
+
+Use the four cleaned LeRobot v3 datasets with the shared mixture configuration:
+
+~~~bash
+bash scripts/train.sh dataloader=mixture
+~~~
+
+[`configs/dataloader/mixture.yaml`](configs/dataloader/mixture.yaml) enables
+AgiBotWorld-Beta, RoboCOIN, DROID, and InternData-A1 with proportional sampling
+by default. Their standalone configurations are in `configs/dataloader/` and
+point to `/mnt/data/wangyuran/pretrain_data_final`. Override each source's
+`dataset_dir` when moving the datasets, keeping the supplied `meta` statistics
+with them. Readers use the existing statistics directly and require no trim
+CSV, exclusion list, or statistics generation step.
 
 ### OpenWAM-α Fine-Tuning
 
